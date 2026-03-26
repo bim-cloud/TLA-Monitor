@@ -1,0 +1,113 @@
+<Window x:Class="AutodeskIDMonitor.Views.FirstTimeSetupWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Welcome to Autodesk ID Monitor" 
+        Height="400" Width="500"
+        WindowStartupLocation="CenterScreen"
+        ResizeMode="NoResize"
+        WindowStyle="None"
+        AllowsTransparency="True"
+        Background="Transparent">
+    
+    <Border CornerRadius="12" Background="White">
+        <Border.Effect>
+            <DropShadowEffect BlurRadius="20" ShadowDepth="5" Opacity="0.3"/>
+        </Border.Effect>
+        
+        <Grid>
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="*"/>
+                <RowDefinition Height="Auto"/>
+            </Grid.RowDefinitions>
+            
+            <!-- Header -->
+            <Border Grid.Row="0" CornerRadius="12,12,0,0" Padding="24">
+                <Border.Background>
+                    <LinearGradientBrush StartPoint="0,0" EndPoint="1,0">
+                        <GradientStop Color="#00B4D8" Offset="0"/>
+                        <GradientStop Color="#0096C7" Offset="1"/>
+                    </LinearGradientBrush>
+                </Border.Background>
+                <StackPanel>
+                    <TextBlock Text="👋 Welcome!" FontSize="28" FontWeight="Bold" Foreground="White"/>
+                    <TextBlock Text="Let's set up your profile" FontSize="14" Foreground="#E0F7FA" Margin="0,8,0,0"/>
+                </StackPanel>
+            </Border>
+            
+            <!-- Content -->
+            <StackPanel Grid.Row="1" Margin="32,24">
+                <TextBlock Text="Please enter your full name" FontSize="16" Foreground="#333" Margin="0,0,0,8"/>
+                <TextBlock Text="This will be used to identify you in reports and dashboards." 
+                           FontSize="12" Foreground="#666" Margin="0,0,0,16" TextWrapping="Wrap"/>
+                
+                <!-- Name Input -->
+                <Border BorderBrush="#E0E0E0" BorderThickness="1" CornerRadius="8" Padding="4">
+                    <Grid>
+                        <TextBox x:Name="NameTextBox" 
+                                 FontSize="16" Padding="12,10"
+                                 BorderThickness="0"
+                                 VerticalContentAlignment="Center"
+                                 TextChanged="NameTextBox_TextChanged"/>
+                        <TextBlock x:Name="PlaceholderText" 
+                                   Text="Your Name (e.g., John Smith)" 
+                                   FontSize="16" Padding="12,10"
+                                   Foreground="#999" 
+                                   IsHitTestVisible="False"
+                                   VerticalAlignment="Center"/>
+                    </Grid>
+                </Border>
+                
+                <!-- Email Input (Optional) -->
+                <TextBlock Text="Work Email (Optional)" FontSize="14" Foreground="#333" Margin="0,24,0,8"/>
+                <Border BorderBrush="#E0E0E0" BorderThickness="1" CornerRadius="8" Padding="4">
+                    <Grid>
+                        <TextBox x:Name="EmailTextBox" 
+                                 FontSize="14" Padding="12,8"
+                                 BorderThickness="0"
+                                 VerticalContentAlignment="Center"
+                                 TextChanged="EmailTextBox_TextChanged"/>
+                        <TextBlock x:Name="EmailPlaceholderText" 
+                                   Text="name@tangentlandscape.com" 
+                                   FontSize="14" Padding="12,8"
+                                   Foreground="#999" 
+                                   IsHitTestVisible="False"
+                                   VerticalAlignment="Center"/>
+                    </Grid>
+                </Border>
+                
+                <!-- Validation Message -->
+                <TextBlock x:Name="ValidationMessage" 
+                           Text="" FontSize="12" Foreground="#E53935" 
+                           Margin="0,12,0,0" Visibility="Collapsed"/>
+            </StackPanel>
+            
+            <!-- Footer -->
+            <Border Grid.Row="2" Background="#F5F5F5" CornerRadius="0,0,12,12" Padding="24,16">
+                <Grid>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="Auto"/>
+                    </Grid.ColumnDefinitions>
+                    
+                    <TextBlock Grid.Column="0" Text="This information is stored locally." 
+                               FontSize="11" Foreground="#999" VerticalAlignment="Center"/>
+                    
+                    <Button x:Name="ContinueButton" Grid.Column="1" 
+                            Content="Continue →" 
+                            Padding="24,10" FontSize="14" FontWeight="SemiBold"
+                            Background="#00B4D8" Foreground="White"
+                            BorderThickness="0" Cursor="Hand"
+                            Click="ContinueButton_Click"
+                            IsEnabled="False">
+                        <Button.Resources>
+                            <Style TargetType="Border">
+                                <Setter Property="CornerRadius" Value="6"/>
+                            </Style>
+                        </Button.Resources>
+                    </Button>
+                </Grid>
+            </Border>
+        </Grid>
+    </Border>
+</Window>

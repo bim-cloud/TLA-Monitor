@@ -1,0 +1,177 @@
+<Window x:Class="AutodeskIDMonitor.Views.ProjectDetailWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Project Details" 
+        Height="450" Width="650"
+        WindowStartupLocation="CenterOwner"
+        Background="White"
+        ResizeMode="CanResizeWithGrip">
+    
+    <Grid Margin="20">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="*"/>
+            <RowDefinition Height="Auto"/>
+        </Grid.RowDefinitions>
+        
+        <!-- Header -->
+        <Border Grid.Row="0" Background="#00B4D8" CornerRadius="8" Padding="15" Margin="0,0,0,15">
+            <Grid>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="Auto"/>
+                </Grid.ColumnDefinitions>
+                
+                <StackPanel Grid.Column="0">
+                    <TextBlock Text="📁 Project Details" FontSize="16" FontWeight="Bold" Foreground="White"/>
+                    <TextBlock x:Name="ProjectNameText" Text="" FontSize="14" Foreground="#E0F7FA" Margin="0,5,0,0" 
+                               TextWrapping="Wrap"/>
+                </StackPanel>
+                
+                <StackPanel Grid.Column="1" HorizontalAlignment="Right" VerticalAlignment="Center">
+                    <TextBlock x:Name="TotalHoursText" Text="0.0h" FontSize="28" FontWeight="Bold" Foreground="White" HorizontalAlignment="Right"/>
+                    <TextBlock Text="Total Hours" FontSize="11" Foreground="#B3E5FC" HorizontalAlignment="Right"/>
+                </StackPanel>
+            </Grid>
+        </Border>
+        
+        <!-- Summary Stats -->
+        <Border Grid.Row="1" Background="#F5F5F5" CornerRadius="8" Padding="15" Margin="0,0,0,15">
+            <Grid>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="*"/>
+                </Grid.ColumnDefinitions>
+                
+                <StackPanel Grid.Column="0" HorizontalAlignment="Center">
+                    <TextBlock x:Name="UserCountText" Text="0" FontSize="24" FontWeight="Bold" Foreground="#00B4D8" HorizontalAlignment="Center"/>
+                    <TextBlock Text="Contributors" FontSize="11" Foreground="#666" HorizontalAlignment="Center"/>
+                </StackPanel>
+                
+                <StackPanel Grid.Column="1" HorizontalAlignment="Center">
+                    <TextBlock x:Name="LastActivityText" Text="-" FontSize="16" FontWeight="SemiBold" Foreground="#4CAF50" HorizontalAlignment="Center"/>
+                    <TextBlock Text="Last Activity" FontSize="11" Foreground="#666" HorizontalAlignment="Center"/>
+                </StackPanel>
+                
+                <StackPanel Grid.Column="2" HorizontalAlignment="Center">
+                    <TextBlock x:Name="AvgHoursText" Text="0.0h" FontSize="24" FontWeight="Bold" Foreground="#FF9800" HorizontalAlignment="Center"/>
+                    <TextBlock Text="Avg per User" FontSize="11" Foreground="#666" HorizontalAlignment="Center"/>
+                </StackPanel>
+            </Grid>
+        </Border>
+        
+        <!-- User Breakdown Table -->
+        <Border Grid.Row="2" Background="White" CornerRadius="8" BorderBrush="#E0E0E0" BorderThickness="1">
+            <Grid>
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="*"/>
+                </Grid.RowDefinitions>
+                
+                <Border Grid.Row="0" Background="#ECEFF1" CornerRadius="8,8,0,0" Padding="12,10">
+                    <TextBlock Text="👥 User Breakdown" FontWeight="SemiBold" FontSize="13" Foreground="#37474F"/>
+                </Border>
+                
+                <DataGrid x:Name="UserBreakdownGrid" Grid.Row="1"
+                          AutoGenerateColumns="False"
+                          IsReadOnly="True"
+                          CanUserAddRows="False"
+                          GridLinesVisibility="Horizontal"
+                          HorizontalGridLinesBrush="#EEEEEE"
+                          BorderThickness="0"
+                          RowHeight="40"
+                          ColumnHeaderHeight="35"
+                          HeadersVisibility="Column"
+                          Background="White">
+                    <DataGrid.ColumnHeaderStyle>
+                        <Style TargetType="DataGridColumnHeader">
+                            <Setter Property="Background" Value="#FAFAFA"/>
+                            <Setter Property="Foreground" Value="#37474F"/>
+                            <Setter Property="FontWeight" Value="SemiBold"/>
+                            <Setter Property="FontSize" Value="12"/>
+                            <Setter Property="Padding" Value="10,8"/>
+                            <Setter Property="BorderBrush" Value="#E0E0E0"/>
+                            <Setter Property="BorderThickness" Value="0,0,0,1"/>
+                        </Style>
+                    </DataGrid.ColumnHeaderStyle>
+                    <DataGrid.RowStyle>
+                        <Style TargetType="DataGridRow">
+                            <Style.Triggers>
+                                <Trigger Property="IsMouseOver" Value="True">
+                                    <Setter Property="Background" Value="#E3F2FD"/>
+                                </Trigger>
+                            </Style.Triggers>
+                        </Style>
+                    </DataGrid.RowStyle>
+                    <DataGrid.Columns>
+                        <DataGridTextColumn Header="User" Binding="{Binding UserName}" Width="*">
+                            <DataGridTextColumn.ElementStyle>
+                                <Style TargetType="TextBlock">
+                                    <Setter Property="VerticalAlignment" Value="Center"/>
+                                    <Setter Property="FontWeight" Value="Medium"/>
+                                    <Setter Property="Padding" Value="5,0"/>
+                                </Style>
+                            </DataGridTextColumn.ElementStyle>
+                        </DataGridTextColumn>
+                        <DataGridTextColumn Header="Hours" Binding="{Binding Hours, StringFormat=F2}" Width="80">
+                            <DataGridTextColumn.ElementStyle>
+                                <Style TargetType="TextBlock">
+                                    <Setter Property="VerticalAlignment" Value="Center"/>
+                                    <Setter Property="HorizontalAlignment" Value="Center"/>
+                                    <Setter Property="FontWeight" Value="Bold"/>
+                                    <Setter Property="Foreground" Value="#00B4D8"/>
+                                    <Setter Property="FontSize" Value="14"/>
+                                </Style>
+                            </DataGridTextColumn.ElementStyle>
+                        </DataGridTextColumn>
+                        <DataGridTextColumn Header="Last Activity" Binding="{Binding LastActivity, StringFormat='HH:mm'}" Width="100">
+                            <DataGridTextColumn.ElementStyle>
+                                <Style TargetType="TextBlock">
+                                    <Setter Property="VerticalAlignment" Value="Center"/>
+                                    <Setter Property="HorizontalAlignment" Value="Center"/>
+                                    <Setter Property="Foreground" Value="#666"/>
+                                    <Setter Property="FontFamily" Value="Consolas"/>
+                                </Style>
+                            </DataGridTextColumn.ElementStyle>
+                        </DataGridTextColumn>
+                        <DataGridTemplateColumn Header="% Contribution" Width="140">
+                            <DataGridTemplateColumn.CellTemplate>
+                                <DataTemplate>
+                                    <Grid Margin="5,0">
+                                        <ProgressBar Value="{Binding ContributionPercent}" Maximum="100" Height="16" 
+                                                     Background="#E0E0E0" Foreground="#00B4D8"/>
+                                        <TextBlock Text="{Binding ContributionPercent, StringFormat={}{0:F1}%}" 
+                                                   HorizontalAlignment="Center" VerticalAlignment="Center" 
+                                                   FontSize="10" FontWeight="SemiBold"/>
+                                    </Grid>
+                                </DataTemplate>
+                            </DataGridTemplateColumn.CellTemplate>
+                        </DataGridTemplateColumn>
+                    </DataGrid.Columns>
+                </DataGrid>
+            </Grid>
+        </Border>
+        
+        <!-- Close Button -->
+        <Button Grid.Row="3" Content="Close" Width="100" Height="35" Margin="0,15,0,0"
+                HorizontalAlignment="Right"
+                Background="#00B4D8" Foreground="White" FontWeight="Medium"
+                BorderThickness="0" Cursor="Hand"
+                Click="CloseButton_Click">
+            <Button.Template>
+                <ControlTemplate TargetType="Button">
+                    <Border x:Name="border" Background="{TemplateBinding Background}" CornerRadius="5" Padding="15,8">
+                        <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                    </Border>
+                    <ControlTemplate.Triggers>
+                        <Trigger Property="IsMouseOver" Value="True">
+                            <Setter TargetName="border" Property="Background" Value="#0096C7"/>
+                        </Trigger>
+                    </ControlTemplate.Triggers>
+                </ControlTemplate>
+            </Button.Template>
+        </Button>
+    </Grid>
+</Window>
