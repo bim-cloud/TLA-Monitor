@@ -8,134 +8,115 @@ using AutodeskIDMonitor.Models;
 
 namespace AutodeskIDMonitor.Services;
 
+/// <summary>
+/// CloudService v5 — talks directly to Supabase (PostgREST) instead of the
+/// old Oracle Cloud Flask server. All write paths go through a single
+/// `upsert_activity` RPC so one heartbeat = one HTTP call.
+///
+/// Configuration (AppConfig):
+///   CloudApiUrl   -> https://jdfzpnreoitpdhttielk.supabase.co
+///   CloudApiKey   -> Supabase anon key (or, ideally, a per-machine signed key)
+/// </summary>
 public class CloudService
 {
     private readonly HttpClient _httpClient;
-    
+
     public CloudService()
     {
-        _httpClient = new HttpClient { Timeout = TimeSpan.FromSeconds(30) };
+        _httpClient = new HttpClient { Timeout = TimeSpan.FromSeconds(15) };
         UpdateApiKey();
     }
 
     public void UpdateApiKey()
     {
-        _httpClient.DefaultRequestHeaders.Remove("X-API-Key");
+        _httpClient.DefaultRequestHeaders.Remove("apikey");
+        _httpClient.DefaultRequestHeaders.Remove("Authorization");
         var apiKey = ConfigService.Instance.Config.CloudApiKey;
         if (!string.IsNullOrEmpty(apiKey))
         {
-            _httpClient.DefaultRequestHeaders.Add("X-API-Key", apiKey);
+            _httpClient.DefaultRequestHeaders.Add("apikey", apiKey);
+            _httpClient.DefaultRequestHeaders.Add("Authorization", $"Bearer {apiKey}");
         }
     }
 
     private string BaseUrl => ConfigService.Instance.Config.CloudApiUrl?.TrimEnd('/') ?? "";
+    private string RpcUrl  => $"{BaseUrl}/rest/v1/rpc";
+    private string RestUrl => $"{BaseUrl}/rest/v1";
 
-    public async Task<bool> SendStatusAsync(string windowsUser, string displayName, string machineName,
-        string autodeskEmail, bool isLoggedIn, string country, string office, string version)
-    {
-        if (!ConfigService.Instance.Config.CloudLoggingEnabled || string.IsNullOrEmpty(BaseUrl))
-            return false;
-
-        try
-        {
-            var status = new
-            {
-                WindowsUser = windowsUser,
-                WindowsDisplayName = displayName,
-                MachineName = machineName,
-                AutodeskEmail = autodeskEmail,
-                IsLoggedIn = isLoggedIn,
-                Country = country,
-                Office = office,
-                ClientVersion = version,
-                LastUpdate = DateTime.UtcNow
-            };
-
-            var response = await _httpClient.PostAsJsonAsync($"{BaseUrl}/api/status", status);
-            return response.IsSuccessStatusCode;
-        }
-        catch
-        {
-            return false;
-        }
-    }
-
-    /// <summary>
-    /// Send real-time activity status including Revit processes and activity state
-    /// </summary>
-    public async Task<bool> SendActivityStatusAsync(string windowsUser, string displayName, string machineName,
+    // -----------------------------------------------------------------------
+    // Heartbeat — replaces the old POST /api/status. Single RPC call.
+    // -----------------------------------------------------------------------
+    public async Task<bool> SendActivityStatusAsync(
+        string windowsUser, string displayName, string machineName,
         string autodeskEmail, bool isLoggedIn, string country, string office, string version,
-        string activityState, int idleSeconds, List<RevitProcessInfo> revitProcesses, 
+        string activityState, int idleSeconds, List<RevitProcessInfo> revitProcesses,
         Dictionary<string, MonitorProjectTimeEntry> projectTimes,
-        DailyActivityBreakdown? activityBreakdown = null, bool isInMeeting = false, string meetingApp = "")
+        DailyActivityBreakdown? activityBreakdown = null,
+        bool isInMeeting = false, string meetingApp = "")
     {
         if (!ConfigService.Instance.Config.CloudLoggingEnabled || string.IsNullOrEmpty(BaseUrl))
             return false;
 
         try
         {
-            // Build OpenProjects list with project names and versions
             var openProjects = revitProcesses
                 .Where(p => !string.IsNullOrEmpty(p.ProjectName))
-                .Select(p => new RevitProjectInfo
-                { 
-                    ProjectName = p.ProjectName, 
-                    RevitVersion = p.RevitVersion ?? ""
-                })
-                .ToList();
+                .Select(p => new { projectName = p.ProjectName, revitVersion = p.RevitVersion ?? "" })
+                .ToList<object>();
 
-            var projectDurations = projectTimes.Values
+            var projectsWorked = projectTimes.Values
                 .Select(p => new
                 {
-                    ProjectName = p.ProjectName,
-                    RevitVersion = p.RevitVersion,
-                    StartTime = p.StartTime,
-                    Duration = p.DurationText,
-                    TotalSeconds = p.CurrentDuration.TotalSeconds,
-                    IsActive = p.IsActive
+                    projectName  = p.ProjectName,
+                    revitVersion = p.RevitVersion,
+                    totalSeconds = p.CurrentDuration.TotalSeconds,
+                    isActive     = p.IsActive
                 })
-                .ToList();
+                .ToList<object>();
 
-            // Get current project from revit processes or project times
-            var currentProject = revitProcesses.FirstOrDefault(p => !string.IsNullOrEmpty(p.ProjectName))?.ProjectName ?? "";
-            if (string.IsNullOrEmpty(currentProject) && projectTimes.Values.Any(p => p.IsActive))
-            {
-                currentProject = projectTimes.Values.FirstOrDefault(p => p.IsActive)?.ProjectName ?? "";
-            }
+            var currentProject =
+                revitProcesses.FirstOrDefault(p => !string.IsNullOrEmpty(p.ProjectName))?.ProjectName
+                ?? projectTimes.Values.FirstOrDefault(p => p.IsActive)?.ProjectName
+                ?? "";
 
-            var status = new
+            var hourly = (activityBreakdown?.HourlyBreakdown ?? new List<HourlyActivity>())
+                .Select(h => new
+                {
+                    hour          = h.Hour,
+                    revitMinutes  = Math.Round(h.RevitMinutes, 1),
+                    meetingMinutes= Math.Round(h.MeetingMinutes, 1),
+                    idleMinutes   = Math.Round(h.IdleMinutes, 1),
+                    otherMinutes  = Math.Round(h.OtherMinutes, 1)
+                })
+                .ToList<object>();
+
+            // RPC payload — note the parameter names match the SQL function exactly
+            var payload = new
             {
-                WindowsUser = windowsUser,
-                WindowsDisplayName = displayName,
-                MachineName = machineName,
-                AutodeskEmail = autodeskEmail,
-                IsLoggedIn = isLoggedIn,
-                Country = country,
-                Office = office,
-                ClientVersion = version,
-                LastUpdate = Services.UserCredentialService.NowDubai,
-                // Real-time activity data
-                ActivityState = activityState,
-                IdleSeconds = idleSeconds,
-                RevitSessionCount = revitProcesses.Count > 0 ? revitProcesses.Count : (openProjects.Count > 0 ? openProjects.Count : 0),
-                OpenProjects = openProjects,
-                ProjectDurations = projectDurations,
-                CurrentProject = currentProject,
-                RevitVersion = revitProcesses.FirstOrDefault()?.RevitVersion ?? "",
-                // Activity breakdown
-                TodayRevitHours = activityBreakdown?.RevitHours ?? 0,
-                TodayMeetingHours = activityBreakdown?.MeetingHours ?? 0,
-                TodayIdleHours = activityBreakdown?.IdleHours ?? 0,
-                TodayOtherHours = activityBreakdown?.OtherHours ?? 0,
-                TodayOvertimeHours = Math.Max(0, (activityBreakdown?.TotalWorkHours ?? 0) - 9.0),
-                TodayTotalHours = activityBreakdown?.TotalWorkHours ?? 0,
-                IsInMeeting = isInMeeting,
-                MeetingApp = meetingApp,
-                // Include hourly breakdown for server sync
-                HourlyBreakdown = GetHourlyBreakdownForSync(activityBreakdown)
+                p_machine_name        = machineName,
+                p_windows_user        = windowsUser,
+                p_autodesk_email      = autodeskEmail ?? "",
+                p_is_logged_in        = isLoggedIn,
+                p_activity_state      = activityState ?? "offline",
+                p_idle_seconds        = idleSeconds,
+                p_revit_session_count = revitProcesses.Count,
+                p_current_project     = currentProject,
+                p_revit_version       = revitProcesses.FirstOrDefault()?.RevitVersion ?? "",
+                p_open_projects       = openProjects,
+                p_is_in_meeting       = isInMeeting,
+                p_meeting_app         = meetingApp ?? "",
+                p_client_version      = version,
+                p_revit_hours         = activityBreakdown?.RevitHours   ?? 0,
+                p_meeting_hours       = activityBreakdown?.MeetingHours ?? 0,
+                p_idle_hours          = activityBreakdown?.IdleHours    ?? 0,
+                p_other_hours         = activityBreakdown?.OtherHours   ?? 0,
+                p_overtime_hours      = Math.Max(0, (activityBreakdown?.TotalWorkHours ?? 0) - 9.0),
+                p_total_hours         = activityBreakdown?.TotalWorkHours ?? 0,
+                p_hourly_breakdown    = hourly,
+                p_projects_worked     = projectsWorked
             };
 
-            var response = await _httpClient.PostAsJsonAsync($"{BaseUrl}/api/status", status);
+            var response = await _httpClient.PostAsJsonAsync($"{RpcUrl}/upsert_activity", payload);
             return response.IsSuccessStatusCode;
         }
         catch
@@ -143,299 +124,257 @@ public class CloudService
             return false;
         }
     }
-    
-    /// <summary>
-    /// Helper to get hourly breakdown for server sync
-    /// </summary>
-    private static List<HourlyBreakdownDto> GetHourlyBreakdownForSync(DailyActivityBreakdown? breakdown)
-    {
-        if (breakdown?.HourlyBreakdown == null)
-            return new List<HourlyBreakdownDto>();
-            
-        return breakdown.HourlyBreakdown.Select(h => new HourlyBreakdownDto
-        {
-            Hour = h.Hour,
-            RevitMinutes = Math.Round(h.RevitMinutes, 1),
-            MeetingMinutes = Math.Round(h.MeetingMinutes, 1),
-            IdleMinutes = Math.Round(h.IdleMinutes, 1),
-            OtherMinutes = Math.Round(h.OtherMinutes, 1)
-        }).ToList();
-    }
-    
-    /// <summary>
-    /// Get all users' activity summaries from server (admin only)
-    /// </summary>
-    public async Task<List<UserActivitySummary>> GetAllUsersActivityAsync()
-    {
-        if (string.IsNullOrEmpty(BaseUrl))
-            return new List<UserActivitySummary>();
 
+    /// <summary>
+    /// Backwards-compat shim — the old CloudService had a separate
+    /// SendStatusAsync overload. Forward it to the unified call so older
+    /// callers keep working without changes.
+    /// </summary>
+    public Task<bool> SendStatusAsync(string windowsUser, string displayName, string machineName,
+        string autodeskEmail, bool isLoggedIn, string country, string office, string version)
+    {
+        return SendActivityStatusAsync(windowsUser, displayName, machineName, autodeskEmail,
+            isLoggedIn, country, office, version,
+            activityState: isLoggedIn ? "active" : "offline",
+            idleSeconds: 0,
+            revitProcesses: new List<RevitProcessInfo>(),
+            projectTimes: new Dictionary<string, MonitorProjectTimeEntry>());
+    }
+
+    // -----------------------------------------------------------------------
+    // Reads — now query the v_live_users view directly.
+    // -----------------------------------------------------------------------
+    public async Task<List<CloudSessionInfo>> GetSessionsAsync()
+    {
+        if (string.IsNullOrEmpty(BaseUrl)) return new List<CloudSessionInfo>();
         try
         {
-            var response = await _httpClient.GetAsync($"{BaseUrl}/api/activity/all");
-            if (response.IsSuccessStatusCode)
-            {
-                var json = await response.Content.ReadAsStringAsync();
-                var options = new System.Text.Json.JsonSerializerOptions { PropertyNameCaseInsensitive = true };
-                return System.Text.Json.JsonSerializer.Deserialize<List<UserActivitySummary>>(json, options) 
-                    ?? new List<UserActivitySummary>();
-            }
+            var url = $"{RestUrl}/v_live_users?select=*&order=last_update.desc";
+            var response = await _httpClient.GetAsync(url);
+            if (!response.IsSuccessStatusCode) return new List<CloudSessionInfo>();
+
+            var json = await response.Content.ReadAsStringAsync();
+            return ParseLiveUsers(json);
         }
-        catch { }
-        
-        return new List<UserActivitySummary>();
+        catch { return new List<CloudSessionInfo>(); }
     }
-    
-    /// <summary>
-    /// Get activity data for a specific date (historical or current)
-    /// </summary>
-    public async Task<(List<UserActivitySummary> Activities, bool IsLive, string Message)> GetActivityByDateAsync(DateTime date)
+
+    public async Task<List<UserActivitySummary>> GetAllUsersActivityAsync()
+    {
+        var sessions = await GetSessionsAsync();
+        return sessions.Select(SessionToActivitySummary).ToList();
+    }
+
+    public async Task<(List<UserActivitySummary> Activities, bool IsLive, string Message)>
+        GetActivityByDateAsync(DateTime date)
     {
         if (string.IsNullOrEmpty(BaseUrl))
             return (new List<UserActivitySummary>(), false, "Server not configured");
 
+        var isToday = date.Date == DateTime.UtcNow.Date;
+        if (isToday)
+        {
+            var live = await GetAllUsersActivityAsync();
+            return (live, true, "Live data");
+        }
+
         try
         {
             var dateStr = date.ToString("yyyy-MM-dd");
-            var response = await _httpClient.GetAsync($"{BaseUrl}/api/activity/date/{dateStr}");
-            if (response.IsSuccessStatusCode)
+            var url = $"{RestUrl}/daily_activity?select=*,users(display_name,email)&date=eq.{dateStr}";
+            var response = await _httpClient.GetAsync(url);
+            if (!response.IsSuccessStatusCode)
+                return (new List<UserActivitySummary>(), false, "No data for date");
+
+            var json = await response.Content.ReadAsStringAsync();
+            var rows = JsonDocument.Parse(json).RootElement;
+            var summaries = new List<UserActivitySummary>();
+            foreach (var r in rows.EnumerateArray())
             {
-                var json = await response.Content.ReadAsStringAsync();
-                var options = new System.Text.Json.JsonSerializerOptions { PropertyNameCaseInsensitive = true };
-                
-                using var doc = System.Text.Json.JsonDocument.Parse(json);
-                var root = doc.RootElement;
-                
-                var isLive = root.TryGetProperty("isLive", out var liveEl) && liveEl.GetBoolean();
-                var message = root.TryGetProperty("message", out var msgEl) ? msgEl.GetString() ?? "" : "";
-                
-                var activities = new List<UserActivitySummary>();
-                if (root.TryGetProperty("activities", out var activitiesEl))
+                summaries.Add(new UserActivitySummary
                 {
-                    activities = System.Text.Json.JsonSerializer.Deserialize<List<UserActivitySummary>>(
-                        activitiesEl.GetRawText(), options) ?? new List<UserActivitySummary>();
-                }
-                
-                return (activities, isLive, message);
+                    MachineName    = r.GetProperty("machine_name").GetString() ?? "",
+                    DisplayName    = r.TryGetProperty("users", out var u) && u.ValueKind == JsonValueKind.Object
+                                     ? u.GetProperty("display_name").GetString() ?? ""
+                                     : "",
+                    AutodeskEmail  = r.TryGetProperty("users", out var u2) && u2.ValueKind == JsonValueKind.Object
+                                     ? u2.GetProperty("email").GetString() ?? ""
+                                     : "",
+                    TodayRevitHours    = r.GetProperty("revit_hours").GetDouble(),
+                    TodayMeetingHours  = r.GetProperty("meeting_hours").GetDouble(),
+                    TodayIdleHours     = r.GetProperty("idle_hours").GetDouble(),
+                    TodayOtherHours    = r.GetProperty("other_hours").GetDouble(),
+                    TodayOvertimeHours = r.GetProperty("overtime_hours").GetDouble(),
+                    TodayTotalHours    = r.GetProperty("total_hours").GetDouble(),
+                });
             }
+            return (summaries, false, $"Historical data for {dateStr}");
         }
         catch (Exception ex)
         {
             return (new List<UserActivitySummary>(), false, $"Error: {ex.Message}");
         }
-        
-        return (new List<UserActivitySummary>(), false, "Failed to fetch data");
     }
 
-    /// <summary>
-    /// Send Revit project status (for Revit add-in integration)
-    /// </summary>
-    public async Task<bool> SendRevitStatusAsync(string windowsUser, string machineName, 
-        string revitVersion, int sessionCount, List<RevitProjectInfo> openProjects)
+    public async Task<List<DailyActivityRecord>> GetHistoricalActivityAsync(DateTime startDate, DateTime endDate)
     {
-        if (!ConfigService.Instance.Config.CloudLoggingEnabled || string.IsNullOrEmpty(BaseUrl))
-            return false;
-
+        if (string.IsNullOrEmpty(BaseUrl)) return new List<DailyActivityRecord>();
         try
         {
-            var status = new
-            {
-                WindowsUser = windowsUser,
-                MachineName = machineName,
-                RevitVersion = revitVersion,
-                RevitSessionCount = sessionCount,
-                OpenProjects = openProjects,
-                CurrentProject = openProjects.FirstOrDefault()?.ProjectName ?? ""
-            };
+            var url = $"{RestUrl}/daily_activity?select=*&date=gte.{startDate:yyyy-MM-dd}&date=lte.{endDate:yyyy-MM-dd}";
+            var response = await _httpClient.GetAsync(url);
+            if (!response.IsSuccessStatusCode) return new List<DailyActivityRecord>();
 
-            var response = await _httpClient.PostAsJsonAsync($"{BaseUrl}/api/revit/status", status);
+            var json = await response.Content.ReadAsStringAsync();
+            var options = new JsonSerializerOptions { PropertyNameCaseInsensitive = true };
+            return JsonSerializer.Deserialize<List<DailyActivityRecord>>(json, options)
+                   ?? new List<DailyActivityRecord>();
+        }
+        catch { return new List<DailyActivityRecord>(); }
+    }
+
+    public async Task<bool> DeleteActivityDataAsync(DateTime date)
+    {
+        if (string.IsNullOrEmpty(BaseUrl)) return false;
+        try
+        {
+            var url = $"{RestUrl}/daily_activity?date=eq.{date:yyyy-MM-dd}";
+            var response = await _httpClient.DeleteAsync(url);
             return response.IsSuccessStatusCode;
         }
-        catch
-        {
-            return false;
-        }
+        catch { return false; }
     }
 
-    public async Task<List<CloudSessionInfo>> GetSessionsAsync()
-    {
-        if (string.IsNullOrEmpty(BaseUrl))
-            return new List<CloudSessionInfo>();
+    // The Excel export endpoint is now generated by the dashboard side; we
+    // keep the method here returning null for backwards compat so the WPF
+    // code path doesn't break.
+    public Task<string?> ExportReportAsync(DateTime _, DateTime __, string ___ = "all")
+        => Task.FromResult<string?>(null);
 
-        try
-        {
-            var response = await _httpClient.GetAsync($"{BaseUrl}/api/sessions");
-            if (response.IsSuccessStatusCode)
-            {
-                var json = await response.Content.ReadAsStringAsync();
-                return JsonSerializer.Deserialize<List<CloudSessionInfo>>(json,
-                    new JsonSerializerOptions { PropertyNameCaseInsensitive = true }) ?? new();
-            }
-        }
-        catch { }
+    // The old SendRevitStatusAsync was a niche "Revit add-in only" hook that
+    // also went through SendActivityStatusAsync for normal clients — we no
+    // longer need a distinct endpoint.
+    public Task<bool> SendRevitStatusAsync(string windowsUser, string machineName,
+        string revitVersion, int sessionCount, List<RevitProjectInfo> openProjects)
+        => Task.FromResult(false);
 
-        return new List<CloudSessionInfo>();
-    }
-
-    public async Task<List<EmailUsageSummary>> GetEmailUsageSummaryAsync()
-    {
-        if (string.IsNullOrEmpty(BaseUrl))
-            return new List<EmailUsageSummary>();
-
-        try
-        {
-            var response = await _httpClient.GetAsync($"{BaseUrl}/api/admin/email-usage");
-            if (response.IsSuccessStatusCode)
-            {
-                return await response.Content.ReadFromJsonAsync<List<EmailUsageSummary>>() ?? new();
-            }
-        }
-        catch { }
-
-        return new List<EmailUsageSummary>();
-    }
-
-    /// <summary>
-    /// Calculate email usage from sessions data (client-side fallback)
-    /// </summary>
-    public List<EmailUsageSummary> CalculateEmailUsageFromSessions(List<CloudSessionInfo> sessions, 
+    public List<EmailUsageSummary> CalculateEmailUsageFromSessions(List<CloudSessionInfo> sessions,
         string? currentUserEmail, string currentUserName, string currentMachine)
     {
+        // Behaviour preserved from v4 — duplicate-email detection works against
+        // whatever GetSessionsAsync returns, which is now the Supabase view.
         var result = new List<EmailUsageSummary>();
-        
-        // Group sessions by email (only logged-in users with valid emails)
         var emailGroups = sessions
             .Where(s => s.IsLoggedIn && !string.IsNullOrEmpty(s.AutodeskEmail) && s.AutodeskEmail.Contains("@"))
             .GroupBy(s => s.AutodeskEmail.ToLower())
             .ToList();
 
-        // Also consider current user
-        if (!string.IsNullOrEmpty(currentUserEmail) && currentUserEmail.Contains("@"))
+        foreach (var g in emailGroups)
         {
-            var currentEmailLower = currentUserEmail.ToLower();
-            var existingGroup = emailGroups.FirstOrDefault(g => g.Key == currentEmailLower);
-            
-            // Check if current user is already in the group
-            bool currentUserInGroup = existingGroup?.Any(s => 
-                s.MachineName.Equals(currentMachine, StringComparison.OrdinalIgnoreCase)) ?? false;
-
-            if (existingGroup != null && !currentUserInGroup)
-            {
-                // Add current user to existing group count
-                var summary = new EmailUsageSummary
-                {
-                    AutodeskEmail = currentUserEmail,
-                    UserCount = existingGroup.Count() + 1,
-                    UserNames = existingGroup.Select(s => s.GetDisplayName()).Append(currentUserName).Distinct().ToList(),
-                    MachineNames = existingGroup.Select(s => s.MachineName).Append(currentMachine).Distinct().ToList()
-                };
-                result.Add(summary);
-            }
-        }
-
-        foreach (var group in emailGroups)
-        {
-            // Skip if already added with current user
-            if (result.Any(r => r.AutodeskEmail.Equals(group.Key, StringComparison.OrdinalIgnoreCase)))
-                continue;
-
-            var sessions_list = group.ToList();
-            
-            // Count unique users (by machine + windows user combination)
-            var uniqueUsers = sessions_list
-                .Select(s => $"{s.MachineName}|{s.WindowsUser}".ToLower())
-                .Distinct()
-                .Count();
-
-            if (uniqueUsers > 1 || sessions_list.Count > 1)
+            var list = g.ToList();
+            var unique = list.Select(s => $"{s.MachineName}|{s.WindowsUser}".ToLower()).Distinct().Count();
+            if (unique > 1 || list.Count > 1)
             {
                 result.Add(new EmailUsageSummary
                 {
-                    AutodeskEmail = group.First().AutodeskEmail,
-                    UserCount = Math.Max(uniqueUsers, sessions_list.Count),
-                    UserNames = sessions_list.Select(s => s.GetDisplayName()).Distinct().ToList(),
-                    MachineNames = sessions_list.Select(s => s.MachineName).Distinct().ToList()
+                    AutodeskEmail = g.First().AutodeskEmail,
+                    UserCount     = Math.Max(unique, list.Count),
+                    UserNames     = list.Select(s => s.GetDisplayName()).Distinct().ToList(),
+                    MachineNames  = list.Select(s => s.MachineName).Distinct().ToList()
                 });
             }
         }
-
         return result;
     }
-    
-    /// <summary>
-    /// Delete historical activity data for a specific date
-    /// </summary>
-    public async Task<bool> DeleteActivityDataAsync(DateTime date)
-    {
-        if (string.IsNullOrEmpty(BaseUrl))
-            return false;
 
-        try
-        {
-            var dateStr = date.ToString("yyyy-MM-dd");
-            var request = new HttpRequestMessage(HttpMethod.Delete, $"{BaseUrl}/api/activity/delete/{dateStr}");
-            var response = await _httpClient.SendAsync(request);
-            return response.IsSuccessStatusCode;
-        }
-        catch
-        {
-            return false;
-        }
+    public Task<List<EmailUsageSummary>> GetEmailUsageSummaryAsync()
+    {
+        // Compute client-side from the live sessions list rather than calling
+        // a dedicated endpoint.
+        return GetSessionsAsync()
+            .ContinueWith(t => CalculateEmailUsageFromSessions(t.Result, null, "", ""));
     }
-    
-    /// <summary>
-    /// Get historical activity data for a date range
-    /// </summary>
-    public async Task<List<DailyActivityRecord>> GetHistoricalActivityAsync(DateTime startDate, DateTime endDate)
-    {
-        if (string.IsNullOrEmpty(BaseUrl))
-            return new List<DailyActivityRecord>();
 
-        try
+    // -----------------------------------------------------------------------
+    // Helpers
+    // -----------------------------------------------------------------------
+    private static List<CloudSessionInfo> ParseLiveUsers(string json)
+    {
+        var list = new List<CloudSessionInfo>();
+        using var doc = JsonDocument.Parse(json);
+        foreach (var r in doc.RootElement.EnumerateArray())
         {
-            var response = await _httpClient.GetAsync(
-                $"{BaseUrl}/api/activity/history?startDate={startDate:yyyy-MM-dd}&endDate={endDate:yyyy-MM-dd}");
-            
-            if (response.IsSuccessStatusCode)
+            var openProjects = new List<RevitProjectInfo>();
+            if (r.TryGetProperty("open_projects", out var op) && op.ValueKind == JsonValueKind.Array)
             {
-                var json = await response.Content.ReadAsStringAsync();
-                var options = new System.Text.Json.JsonSerializerOptions { PropertyNameCaseInsensitive = true };
-                return System.Text.Json.JsonSerializer.Deserialize<List<DailyActivityRecord>>(json, options) 
-                    ?? new List<DailyActivityRecord>();
+                foreach (var p in op.EnumerateArray())
+                {
+                    openProjects.Add(new RevitProjectInfo
+                    {
+                        ProjectName  = p.TryGetProperty("projectName", out var n) ? n.GetString() ?? "" : "",
+                        RevitVersion = p.TryGetProperty("revitVersion", out var v) ? v.GetString() ?? "" : ""
+                    });
+                }
             }
-        }
-        catch { }
-        
-        return new List<DailyActivityRecord>();
-    }
-    
-    /// <summary>
-    /// Export activity report as CSV
-    /// </summary>
-    public async Task<string?> ExportReportAsync(DateTime startDate, DateTime endDate, string reportType = "all")
-    {
-        if (string.IsNullOrEmpty(BaseUrl))
-            return null;
 
-        try
-        {
-            var response = await _httpClient.GetAsync(
-                $"{BaseUrl}/api/export/excel?startDate={startDate:yyyy-MM-dd}&endDate={endDate:yyyy-MM-dd}&reportType={reportType}");
-            
-            if (response.IsSuccessStatusCode)
+            list.Add(new CloudSessionInfo
             {
-                return await response.Content.ReadAsStringAsync();
-            }
+                MachineName        = GetStr(r, "machine_name"),
+                WindowsUser        = GetStr(r, "windows_user"),
+                WindowsDisplayName = GetStr(r, "display_name"),
+                DisplayName        = GetStr(r, "display_name"),
+                AutodeskEmail      = GetStr(r, "autodesk_email"),
+                IsLoggedIn         = GetBool(r, "is_logged_in"),
+                LastSeen           = GetDateTime(r, "last_update"),
+                LastUpdate         = GetDateTime(r, "last_update"),
+                ClientVersion      = GetStr(r, "client_version"),
+                RevitVersion       = GetStr(r, "revit_version"),
+                CurrentProject     = GetStr(r, "current_project"),
+                OpenProjects       = openProjects,
+                RevitSessionCount  = GetInt(r, "revit_session_count"),
+                ActivityState      = GetStr(r, "activity_state"),
+                IdleSeconds        = GetInt(r, "idle_seconds"),
+                IsInMeeting        = GetBool(r, "is_in_meeting"),
+                MeetingApp         = GetStr(r, "meeting_app"),
+                TodayRevitHours    = GetDouble(r, "today_revit_hours"),
+                TodayMeetingHours  = GetDouble(r, "today_meeting_hours"),
+                TodayIdleHours     = GetDouble(r, "today_idle_hours"),
+                TodayTotalHours    = GetDouble(r, "today_total_hours"),
+                TodayOvertimeHours = GetDouble(r, "today_overtime_hours"),
+            });
         }
-        catch { }
-        
-        return null;
+        return list;
     }
+
+    private static UserActivitySummary SessionToActivitySummary(CloudSessionInfo s) => new()
+    {
+        MachineName        = s.MachineName,
+        DisplayName        = s.GetDisplayName(),
+        AutodeskEmail      = s.AutodeskEmail,
+        IsOnline           = s.IsLoggedIn,
+        ActivityState      = s.ActivityState,
+        CurrentProject     = s.CurrentProject,
+        RevitVersion       = s.RevitVersion,
+        TodayRevitHours    = s.TodayRevitHours,
+        TodayMeetingHours  = s.TodayMeetingHours,
+        TodayIdleHours     = s.TodayIdleHours,
+        TodayTotalHours    = s.TodayTotalHours,
+        TodayOvertimeHours = s.TodayOvertimeHours,
+    };
+
+    private static string GetStr(JsonElement e, string n) =>
+        e.TryGetProperty(n, out var v) && v.ValueKind == JsonValueKind.String ? v.GetString() ?? "" : "";
+    private static bool GetBool(JsonElement e, string n) =>
+        e.TryGetProperty(n, out var v) && v.ValueKind == JsonValueKind.True;
+    private static int GetInt(JsonElement e, string n) =>
+        e.TryGetProperty(n, out var v) && v.ValueKind == JsonValueKind.Number ? v.GetInt32() : 0;
+    private static double GetDouble(JsonElement e, string n) =>
+        e.TryGetProperty(n, out var v) && v.ValueKind == JsonValueKind.Number ? v.GetDouble() : 0;
+    private static DateTime GetDateTime(JsonElement e, string n) =>
+        e.TryGetProperty(n, out var v) && v.ValueKind == JsonValueKind.String && DateTime.TryParse(v.GetString(), out var d) ? d : DateTime.MinValue;
 }
 
-/// <summary>
-/// DTO for hourly breakdown data transfer
-/// </summary>
+/// <summary>Kept for backwards compatibility with MainViewModel.cs callers.</summary>
 public class HourlyBreakdownDto
 {
     public int Hour { get; set; }
