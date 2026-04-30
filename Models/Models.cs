@@ -347,8 +347,8 @@ public class AppConfig
     public string Office { get; set; } = "Dubai";
     public int MonitoringIntervalSeconds { get; set; } = 5;
     public bool CloudLoggingEnabled { get; set; } = true;
-    public string CloudApiUrl { get; set; } = "http://141.145.153.32:5000";
-    public string CloudApiKey { get; set; } = "Tangent@2026";
+    public string CloudApiUrl { get; set; } = "https://jdfzpnreoitpdhttielk.supabase.co";
+    public string CloudApiKey { get; set; } = "REPLACE_WITH_SUPABASE_ANON_KEY";
     public bool NetworkLoggingEnabled { get; set; } = false;
     public string NetworkLogPath { get; set; } = "";
     public bool StartMinimized { get; set; } = true;
